@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Talking Head - MP3 example</title>
+
+    <style>
+        body, html {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: dimgray;
+            color: white;
+        }
+
+        #avatar {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 40%;
+            bottom: 0;
+        }
+
+        #controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            position: absolute;
+            top: 50px;
+            left: Calc(60% + 50px);
+            right: 50px;
+            bottom: 50px;
+        }
+
+        #load {
+            font-family: Arial;
+            font-size: 20px;
+        }
+
+        #json {
+            flex: 1;
+            background-color: lightgray;
+            font-family: Arial;
+            font-size: 20px;
+        }
+
+        #play {
+            font-family: Arial;
+            font-size: 20px;
+        }
+
+        #loading {
+            display: block;
+            position: absolute;
+            top: 50px;
+            left: 50px;
+            width: 200px;
+            font-family: Arial;
+            font-size: 20px;
+        }
+    </style>
+
+    <script type="importmap">
+        { "imports":
+          {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js/+esm",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/",
+            "talkinghead": "./talkinghead.mjs"
+          }
+        }
+    </script>
+
+    <script type="module">
+        import {TalkingHead} from "talkinghead";
+
+        let head; // TalkingHead instance
+        let audio; // Audio object
+
+        const visemeMap = [
+            "sil", 'aa', 'aa', 'O', 'E', // 0 - 4
+            'E', 'I', 'U', 'O', 'aa', // 5 - 9
+            'O', 'I', 'kk', 'RR', 'nn', // 10 - 14
+            'SS', 'SS', 'TH', 'FF', 'DD', // 15 - 19
+            'kk', 'PP' // 20 - 21
+        ];
+
+        const speak = {audio: [], words: [], wtimes: [], wdurations: [], visemes: [], vtimes: [], vdurations: []}
+
+        document.addEventListener('DOMContentLoaded', async function (e) {
+
+            const response = await fetch('tts.json')
+            const json = await response.json();
+            console.log(json)
+
+            json.VisemeResults.forEach(e => {
+                const viseme = visemeMap[e.VisemeId];
+                //times are already in seconds (server side)
+                const time = e.AudioOffset;
+
+                // Calculate the duration of the previous viseme
+                if (speak.vdurations.length) {
+
+                    if (speak.visemes[speak.visemes.length - 1] === 0) {
+                        speak.visemes.pop();
+                        speak.vtimes.pop();
+                        speak.vdurations.pop();
+                    } else {
+                        // Remove silence
+                        speak.vdurations[speak.vdurations.length - 1] =
+                            time - speak.vtimes[speak.vdurations.length - 1];
+                    }
+                }
+
+                // Add this viseme
+                speak.visemes.push(viseme);
+                speak.vtimes.push(time);
+                speak.vdurations.push(75); // Duration will be fixed when the next viseme is received
+            });
+
+            json.Words.forEach(e => {
+                const word = e.Text;
+                //times are already in seconds (server side)
+                const time = e.AudioOffset;
+                const duration = e.Duration;
+
+                if (e.BoundaryType === "Punctuation" && speak.words.length) {
+                    speak.words[speak.words.length - 1] += word;
+                } else if (e.BoundaryType === "Word" || e.BoundaryType === "Punctuation") {
+                    speak.words.push(word);
+                    speak.wtimes.push(time);
+                    speak.wdurations.push(duration);
+                }
+            });
+
+            //debugger;
+
+            // Instantiate the class
+            // NOTE: Text-to-speech not initialized
+            const nodeAvatar = document.getElementById('avatar');
+            head = new TalkingHead(nodeAvatar, {
+                ttsEndpoint: "https://eu-texttospeech.googleapis.com/v1beta1/text:synthesize",
+                cameraView: "head",
+                lipsyncModules: ['en']
+            });
+
+            const base64ToArrayBuffer = (base64) => {
+                const binaryString = atob(base64);
+                const length = binaryString.length;
+                const bytes = new Uint8Array(length);
+
+                for (let i = 0; i < length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                return bytes.buffer;
+            }
+
+            speak.audio = await head.audioCtx.decodeAudioData(base64ToArrayBuffer(json.Audio));
+            console.log(speak)
+
+            // Load and show the avatar
+            const nodeLoading = document.getElementById('loading');
+            try {
+                await head.showAvatar({
+                    url: './brunette.glb',
+                    body: 'F',
+                    avatarMood: 'neutral',
+                    lipSyncLang: 'en'
+                }, (ev) => {
+                    if (ev.lengthComputable) {
+                        let val = Math.min(100, Math.round(ev.loaded / ev.total * 100));
+                        nodeLoading.textContent = "Loading " + val + "%";
+                    }
+                });
+                nodeLoading.style.display = 'none';
+            } catch (error) {
+                console.log(error);
+                nodeLoading.textContent = error.toString();
+            }
+
+            // Play button clicked
+            const nodePlay = document.getElementById('play');
+            const subtitleElement = document.getElementById('json');
+            nodePlay.addEventListener('click', async function () {
+                console.log('playing')
+                subtitleElement.value = "";
+                await head.speakAudio(speak, {}, (s) => {
+                    subtitleElement.value += s;
+                });
+            });
+
+        });
+
+    </script>
+</head>
+
+<body>
+<div id="avatar"></div>
+<div id="controls">
+    <textarea id="json" readonly></textarea>
+    <input id="play" type="button" value="Play">
+</div>
+<div id="loading"></div>
+</body>
+
+</html>
